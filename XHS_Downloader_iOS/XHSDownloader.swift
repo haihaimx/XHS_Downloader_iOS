@@ -25,6 +25,11 @@ struct RemoteMedia: Identifiable, Hashable {
     }
 }
 
+struct MediaDescriptor {
+    let url: String
+    let metadata: NoteMetadata
+}
+
 enum XHSDownloaderError: LocalizedError {
     case invalidURL
     case requestFailed
@@ -66,6 +71,24 @@ final class XHSDownloader {
     private let htmlImgRegex = try! NSRegularExpression(pattern: "<img[^>]+src\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"][^>]*>", options: .caseInsensitive)
     private let htmlUrlRegex = try! NSRegularExpression(pattern: "https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+\\.(?:jpg|jpeg|png|gif|mp4|avi|mov|webm|wmv|flv|f4v|swf|mpg|mpeg|asf|3gp|3g2|mkv|webp|heic|heif)", options: .caseInsensitive)
 
+    private static let publishFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yy-MM-dd"
+        return formatter
+    }()
+
+    private static let isoDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    private static let compactDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd"
+        return formatter
+    }()
+
     init(session: URLSession? = nil) {
         if let session {
             self.session = session
@@ -99,6 +122,8 @@ final class XHSDownloader {
 
         var aggregated: [RemoteMedia] = []
         var seen = Set<String>()
+        let downloadEpochSeconds = Date().timeIntervalSince1970
+        let preferences = NamingPreferences.load()
 
         for context in contexts {
             try Task.checkCancellation()
@@ -108,16 +133,23 @@ final class XHSDownloader {
                 continue
             }
 
-            let mediaUrls = parsePostDetails(html: html)
-            if mediaUrls.isEmpty {
+            let descriptors = parsePostDetails(html: html)
+            if descriptors.isEmpty {
                 await logger("笔记 \(context.postId ?? context.resolvedURL.lastPathComponent) 未找到可下载媒体")
                 continue
             }
 
-            let mediaItems = buildRemoteMedia(from: mediaUrls, postId: context.postId)
-            let newItems = mediaItems.filter { seen.insert($0.originalURLString).inserted }
-            await logger("笔记 \(context.postId ?? context.resolvedURL.lastPathComponent) 解析到 \(newItems.count) 个媒体资源")
-            aggregated.append(contentsOf: newItems)
+            let filtered = descriptors.filter { seen.insert($0.url).inserted }
+            if filtered.isEmpty {
+                continue
+            }
+
+            let mediaItems = buildRemoteMedia(from: filtered,
+                                              postId: context.postId,
+                                              downloadEpochSeconds: downloadEpochSeconds,
+                                              preferences: preferences)
+            await logger("笔记 \(context.postId ?? context.resolvedURL.lastPathComponent) 解析到 \(mediaItems.count) 个媒体资源")
+            aggregated.append(contentsOf: mediaItems)
         }
 
         return aggregated
@@ -129,7 +161,7 @@ final class XHSDownloader {
         return formatter.string(from: Date())
     }
 
-    func download(media: RemoteMedia, sessionTimestamp: String) async throws -> URL {
+    func download(media: RemoteMedia, sessionTimestamp _: String) async throws -> URL {
         try Task.checkCancellation()
 
         var request = URLRequest(url: media.url)
@@ -143,7 +175,7 @@ final class XHSDownloader {
         let ext = determineFileExtension(from: response, fallbackURL: media.url, mediaType: media.type)
 
         let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent("xhs_\(sessionTimestamp)_\(media.fileBaseName).\(ext)")
+            .appendingPathComponent("xhs_\(media.fileBaseName).\(ext)")
 
         if FileManager.default.fileExists(atPath: destination.path) {
             try? FileManager.default.removeItem(at: destination)
@@ -254,42 +286,46 @@ private extension XHSDownloader {
         return nil
     }
 
-    func parsePostDetails(html: String) -> [String] {
+    func parsePostDetails(html: String) -> [MediaDescriptor] {
         if let script = extractInitialStateScript(from: html),
            let root = evaluateInitialStateScript(script) {
-            let urls = parseMediaFromRoot(root)
-            if !urls.isEmpty {
-                var seen = Set<String>()
-                return urls.filter { seen.insert($0).inserted }
+            let descriptors = parseMediaFromRoot(root)
+            if !descriptors.isEmpty {
+                return uniqueDescriptors(descriptors)
             }
         }
 
-        return extractUrlsFromHtml(html)
+        return extractUrlsFromHtml(html).map { MediaDescriptor(url: $0, metadata: NoteMetadata()) }
     }
 
-    func parseMediaFromRoot(_ root: [String: Any]) -> [String] {
-        var mediaUrls: [String] = []
+    func uniqueDescriptors(_ descriptors: [MediaDescriptor]) -> [MediaDescriptor] {
+        var seen = Set<String>()
+        return descriptors.filter { seen.insert($0.url).inserted }
+    }
+
+    func parseMediaFromRoot(_ root: [String: Any]) -> [MediaDescriptor] {
+        var mediaDescriptors: [MediaDescriptor] = []
 
         if let noteRoot = root["note"] as? [String: Any] {
-            mediaUrls.append(contentsOf: parseNoteRoot(noteRoot))
+            mediaDescriptors.append(contentsOf: parseNoteRoot(noteRoot))
         }
 
-        if mediaUrls.isEmpty, let detailMap = root["noteDetailMap"] as? [String: Any] {
+        if mediaDescriptors.isEmpty, let detailMap = root["noteDetailMap"] as? [String: Any] {
             for value in detailMap.values {
                 if let dict = value as? [String: Any] {
-                    mediaUrls.append(contentsOf: parseNoteRoot(dict))
+                    mediaDescriptors.append(contentsOf: parseNoteRoot(dict))
                 }
             }
         }
 
-        if mediaUrls.isEmpty, let feed = root["feed"] as? [String: Any] {
-            mediaUrls.append(contentsOf: parseFeed(feed))
+        if mediaDescriptors.isEmpty, let feed = root["feed"] as? [String: Any] {
+            mediaDescriptors.append(contentsOf: parseFeed(feed))
         }
 
-        if mediaUrls.isEmpty {
-            mediaUrls.append(contentsOf: parseNoteRoot(root))
+        if mediaDescriptors.isEmpty {
+            mediaDescriptors.append(contentsOf: parseNoteRoot(root))
         }
-        return mediaUrls
+        return mediaDescriptors
     }
 
     func extractInitialStateScript(from html: String) -> String? {
@@ -329,46 +365,47 @@ private extension XHSDownloader {
         return dictionary
     }
 
-    func parseNoteRoot(_ noteRoot: [String: Any]) -> [String] {
-        var urls: [String] = []
+    func parseNoteRoot(_ noteRoot: [String: Any]) -> [MediaDescriptor] {
+        var descriptors: [MediaDescriptor] = []
 
         if let detailMap = noteRoot["noteDetailMap"] as? [String: Any] {
             for value in detailMap.values {
                 if let dict = value as? [String: Any] {
                     if let note = dict["note"] as? [String: Any] {
-                        urls.append(contentsOf: collectMedia(from: note))
+                        descriptors.append(contentsOf: collectMedia(from: note))
                     } else {
-                        urls.append(contentsOf: collectMedia(from: dict))
+                        descriptors.append(contentsOf: collectMedia(from: dict))
                     }
                 }
             }
         } else if let note = noteRoot["note"] as? [String: Any] {
-            urls.append(contentsOf: collectMedia(from: note))
+            descriptors.append(contentsOf: collectMedia(from: note))
         } else {
-            urls.append(contentsOf: collectMedia(from: noteRoot))
+            descriptors.append(contentsOf: collectMedia(from: noteRoot))
         }
-        return urls
+        return descriptors
     }
 
-    func parseFeed(_ feed: [String: Any]) -> [String] {
-        var urls: [String] = []
+    func parseFeed(_ feed: [String: Any]) -> [MediaDescriptor] {
+        var descriptors: [MediaDescriptor] = []
         if let items = feed["items"] as? [[String: Any]] {
             for item in items {
-                urls.append(contentsOf: collectMedia(from: item))
+                descriptors.append(contentsOf: collectMedia(from: item))
             }
         }
-        return urls
+        return descriptors
     }
 
-    func collectMedia(from note: [String: Any]) -> [String] {
-        var urls: [String] = []
+    func collectMedia(from note: [String: Any]) -> [MediaDescriptor] {
+        var descriptors: [MediaDescriptor] = []
+        let metadata = extractMetadata(from: note)
 
         if let video = note["video"] as? [String: Any] {
-            urls.append(contentsOf: extractVideoUrls(from: video))
+            descriptors.append(contentsOf: extractVideoUrls(from: video).map { MediaDescriptor(url: $0, metadata: metadata) })
         }
 
         if let media = note["media"] as? [String: Any] {
-            urls.append(contentsOf: extractVideoUrls(from: media))
+            descriptors.append(contentsOf: extractVideoUrls(from: media).map { MediaDescriptor(url: $0, metadata: metadata) })
         }
 
         var imageArrays: [[String: Any]] = []
@@ -382,18 +419,18 @@ private extension XHSDownloader {
 
         for image in imageArrays {
             if let url = preferredImageURL(from: image) {
-                urls.append(url)
+                descriptors.append(MediaDescriptor(url: url, metadata: metadata))
             }
             if let stream = image["stream"] as? [String: Any] {
-                urls.append(contentsOf: extractStreamUrls(from: stream))
+                descriptors.append(contentsOf: extractStreamUrls(from: stream).map { MediaDescriptor(url: $0, metadata: metadata) })
             }
         }
 
         if let cover = note["cover"] as? [String: Any], let url = preferredImageURL(from: cover) {
-            urls.append(url)
+            descriptors.append(MediaDescriptor(url: url, metadata: metadata))
         }
 
-        return urls
+        return descriptors
     }
 
     func extractVideoUrls(from videoDict: [String: Any]) -> [String] {
@@ -413,6 +450,97 @@ private extension XHSDownloader {
         }
 
         return urls
+    }
+
+    func extractMetadata(from note: [String: Any]) -> NoteMetadata {
+        var metadata = NoteMetadata()
+        if let user = note["user"] as? [String: Any] {
+            metadata.userName = firstNonEmptyString(user["nickname"], user["name"], user["userName"], user["user_name"])
+            metadata.userId = firstNonEmptyString(user["redId"], user["red_id"], user["userId"], user["userid"], user["user_id"])
+        }
+        if metadata.userId == nil {
+            metadata.userId = firstNonEmptyString(note["userId"], note["uid"])
+        }
+        metadata.title = firstNonEmptyString(note["title"], note["desc"], note["description"], note["noteId"])
+        metadata.publishTime = extractPublishTime(from: note)
+        return metadata
+    }
+
+    func firstNonEmptyString(_ values: Any?...) -> String? {
+        for value in values {
+            if let string = value as? String {
+                let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return trimmed
+                }
+            }
+        }
+        return nil
+    }
+
+    func extractPublishTime(from note: [String: Any]) -> String? {
+        let textualKeys = ["publishTime", "publish_time", "timeText", "time", "displayTime", "createTime"]
+        for key in textualKeys {
+            if let value = note[key] as? String,
+               let normalized = normalizeExplicitDate(value) {
+                return normalized
+            }
+        }
+
+        let epochKeys = ["time", "publishTime", "publish_time", "createTime", "timestamp", "timeStamp"]
+        for key in epochKeys {
+            if let number = note[key] as? NSNumber,
+               let formatted = formatEpoch(number.doubleValue) {
+                return formatted
+            }
+            if let string = note[key] as? String,
+               let digits = digitsOnly(from: string),
+               let numeric = Double(digits),
+               let formatted = formatEpoch(numeric) {
+                return formatted
+            }
+        }
+
+        return nil
+    }
+
+    func normalizeExplicitDate(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let match = trimmed.range(of: #"\d{2}-\d{2}-\d{2}"#, options: .regularExpression) {
+            return String(trimmed[match])
+        }
+
+        if let match = trimmed.range(of: #"\d{4}-\d{2}-\d{2}"#, options: .regularExpression) {
+            let substring = String(trimmed[match])
+            if let date = Self.isoDateFormatter.date(from: substring) {
+                return Self.publishFormatter.string(from: date)
+            }
+        }
+
+        if let digits = digitsOnly(from: trimmed), digits.count >= 8 {
+            let firstEight = String(digits.prefix(8))
+            if let date = Self.compactDateFormatter.date(from: firstEight) {
+                return Self.publishFormatter.string(from: date)
+            }
+        }
+
+        return nil
+    }
+
+    func digitsOnly(from string: String) -> String? {
+        let cleaned = string.replacingOccurrences(of: "[^0-9]", with: "", options: .regularExpression)
+        return cleaned.isEmpty ? nil : cleaned
+    }
+
+    func formatEpoch(_ rawValue: Double) -> String? {
+        var value = rawValue
+        if value < 1_000_000_000 { return nil }
+        if value < 1_000_000_000_000 { value *= 1000 }
+        if value < 946_684_800_000 { return nil }
+        let date = Date(timeIntervalSince1970: value / 1000)
+        return Self.publishFormatter.string(from: date)
     }
 
     func extractStreamUrls(from stream: [String: Any]) -> [String] {
@@ -480,10 +608,15 @@ private extension XHSDownloader {
         return urls
     }
 
-    func buildRemoteMedia(from urls: [String], postId: String?) -> [RemoteMedia] {
+    func buildRemoteMedia(from descriptors: [MediaDescriptor],
+                          postId: String?,
+                          downloadEpochSeconds: TimeInterval,
+                          preferences: NamingPreferences) -> [RemoteMedia] {
         var results: [RemoteMedia] = []
-        let base = postId ?? UUID().uuidString.prefix(8).description
-        for (index, raw) in urls.enumerated() {
+        let fallbackBase = postId ?? UUID().uuidString.prefix(8).description
+
+        for (index, descriptor) in descriptors.enumerated() {
+            let raw = descriptor.url
             guard let encoded = raw.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed),
                   let originalURL = URL(string: encoded) ?? URL(string: raw) else { continue }
             let type: RemoteMedia.MediaType = isVideoUrl(raw) ? .video : .image
@@ -494,8 +627,19 @@ private extension XHSDownloader {
             } else {
                 normalizedURL = originalURL
             }
-            let baseName = "\(base)_\(index + 1)"
-            results.append(RemoteMedia(url: normalizedURL, type: type, fileBaseName: baseName, originalURLString: raw))
+
+            let baseName = NamingFormatter.makeBaseName(
+                metadata: descriptor.metadata,
+                fallbackPostId: postId ?? fallbackBase,
+                index: index + 1,
+                downloadEpochSeconds: downloadEpochSeconds,
+                preferences: preferences
+            )
+
+            results.append(RemoteMedia(url: normalizedURL,
+                                       type: type,
+                                       fileBaseName: baseName,
+                                       originalURLString: raw))
         }
         return results
     }
@@ -542,7 +686,7 @@ private extension XHSDownloader {
               !originalUrl.contains("sns-video"),
               let token = extractImageToken(from: originalUrl) else { return originalUrl }
 
-        return "https://ci.xiaohongshu.com/\(token)?imageView2/format/png"
+        return "https://ci.xiaohongshu.com/\(token)?imageView2/format/jpg"
     }
 
     func extractImageToken(from url: String) -> String? {

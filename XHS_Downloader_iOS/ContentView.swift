@@ -209,10 +209,14 @@ struct LogListView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     if logs.isEmpty {
+                        Image(systemName: "info.circle.text.page")
+                            .font(.system(size: 32))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.top, 20)
                         Text("实时日志会显示在此处")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                            .padding(.vertical, 8)
                             .frame(maxWidth: .infinity, alignment: .center)
                     } else {
                         ForEach(logs) { log in
@@ -338,43 +342,135 @@ struct MediaTile: View {
 
 struct SettingsSheet: View {
     @Environment(\.openURL) private var openURL
+    @AppStorage(NamingPreferences.enableKey) private var enableCustomNaming = false
+    @AppStorage(NamingPreferences.templateKey) private var customTemplate = NamingFormatter.defaultTemplate
+
+    private let tokens: [NamingToken] = [
+        NamingToken(placeholder: "{username}", title: "用户名"),
+        NamingToken(placeholder: "{userId}", title: "小红书号"),
+        NamingToken(placeholder: "{title}", title: "标题"),
+        NamingToken(placeholder: "{postId}", title: "笔记ID"),
+        NamingToken(placeholder: "{publishTime}", title: "发布时间"),
+        NamingToken(placeholder: "{downloadTimestamp}", title: "开始下载时的时间戳"),
+//        NamingToken(placeholder: "{index}", title: "第几张（自然数）"),
+//        NamingToken(placeholder: "{index_padded}", title: "第几张（两位数）")
+    ]
 
     var body: some View {
-        VStack(spacing: 16) {                
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+//                Capsule()
+//                    .fill(Color.secondary.opacity(0.25))
+//                    .frame(width: 40, height: 4)
+//                    .frame(maxWidth: .infinity)
+//                    .padding(.top, 8)
 
-            Text("设置")
-                .font(.title3)
-                .fontWeight(.semibold)
-                .padding(.top, 10)
+                Text("设置")
+                    .font(.title3)
+                    .fontWeight(.semibold)
 
-            Spacer()
+                Toggle("启用自定义命名格式", isOn: $enableCustomNaming)
+                    .toggleStyle(SwitchToggleStyle(tint: .accentColor))
 
-            Text("设置内容即将上线，敬请期待")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("当前命名格式")
+                        .font(.headline)
 
-            Button {
-                if let githubURL = URL(string: "https://github.com/NEORUAA/XHS_Downloader_iOS") {
-                    openURL(githubURL)
+                    TextEditor(text: $customTemplate)
+                        .frame(minHeight: 80, maxHeight: 120)
+                        .font(.system(.body, design: .monospaced))
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 16).stroke(Color.secondary.opacity(0.2)))
+                        .disabled(!enableCustomNaming)
+                        .opacity(enableCustomNaming ? 1 : 0.4)
+
+                    Text("例如：{title}_{publishTime}_{downloadTimestamp}")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    Text("可自定义任意字符与字段组合，字段使用花括号包裹；文件末尾会自动追加编号保障唯一。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    Button("重置为默认格式") {
+                        customTemplate = NamingFormatter.defaultTemplate
+                    }
+                    .disabled(!enableCustomNaming)
                 }
-            } label: {
-                HStack {
-                    Spacer()
-                    Text("打开GitHub仓库")
-                        .fontWeight(.semibold)
-                        .padding(10)
-                    Spacer()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("可用字段")
+                        .font(.headline)
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                        ForEach(tokens) { token in
+                            Button {
+                                appendPlaceholder(token.placeholder)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(token.placeholder)
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                        .foregroundStyle(.primary)
+                                    Text(token.title)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(RoundedRectangle(cornerRadius: 14).fill(Color(.secondarySystemBackground)))
+                            }
+                            .disabled(!enableCustomNaming)
+                        }
+                    }
+
+                    Text("点击字段可插入占位符，系统会在末尾自动追加编号保障唯一。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
+
+                Divider()
+
+                Button {
+                    if let githubURL = URL(string: "https://github.com/NEORUAA/XHS_Downloader_iOS") {
+                        openURL(githubURL)
+                    }
+                } label: {
+                    HStack {
+                        Spacer()
+                        Text("打开GitHub仓库")
+                            .fontWeight(.semibold)
+                            .padding(.vertical, 10)
+                        Spacer()
+                    }
+                }
+                .glassEffect()
+                .buttonStyle(.borderedProminent)
             }
-            .glassEffect()
-//            .frame(maxWidth: 200)
-            .buttonStyle(.borderedProminent)
-
-            Spacer()
+            .padding(24)
         }
-        .padding(24)
+        .onAppear {
+            if customTemplate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                customTemplate = NamingFormatter.defaultTemplate
+            }
+        }
+    }
+
+    private func appendPlaceholder(_ placeholder: String) {
+        guard enableCustomNaming else { return }
+        if customTemplate.isEmpty {
+            customTemplate = placeholder
+        } else {
+            if customTemplate.last?.isWhitespace == false {
+                customTemplate.append(" ")
+            }
+            customTemplate.append(placeholder)
+        }
+    }
+
+    struct NamingToken: Identifiable {
+        let placeholder: String
+        let title: String
+        var id: String { placeholder }
     }
 }
 
