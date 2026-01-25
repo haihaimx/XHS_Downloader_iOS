@@ -140,6 +140,7 @@ struct HomeView: View {
                 }
                 .padding(.top, 10)
             }
+            .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("小红书下载器")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
@@ -168,7 +169,7 @@ struct LogView: View {
     var body: some View {
         NavigationView {
             ScrollView {
-                VStack(spacing: 16) {
+                VStack(spacing: 0) {
                     if viewModel.showProgress || viewModel.isDownloading {
                         VStack(spacing: 6) {
                             HStack {
@@ -182,8 +183,6 @@ struct LogView: View {
                         }
                         .padding(.top, 10)
                         .padding(.horizontal, 16)
-                        .background(Color(.tertiarySystemBackground))
-                        .cornerRadius(18)
                     }
 
 //                    Text("日志状态")
@@ -195,8 +194,8 @@ struct LogView: View {
                             Text("暂无内容，开始下载后会显示日志")
                                 .foregroundColor(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(16)
                         }
-                        .padding(16)
                     } else {
                         ScrollViewReader { proxy in
                             ScrollView {
@@ -223,8 +222,8 @@ struct LogView: View {
                         }
                     }
                 }
-                .padding(.top, 10)
             }
+            .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("日志状态")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
@@ -246,29 +245,27 @@ struct DownloadsView: View {
 
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(spacing: 16) {
-//                    Text("已下载")
-//                        .font(.headline)
-//                        .padding(.horizontal, 16)
-
-                    if viewModel.mediaItems.isEmpty {
-                        VStack {
-                            Text("暂无内容，开始下载后会显示缩略图")
-                                .foregroundColor(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .center)
-                        }
-                        .padding(16)
-                    } else {
-                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                            ForEach(viewModel.mediaItems) { item in
-                                MediaTile(item: item)
-                            }
-                        }
-                        .padding(16)
+            ZStack {
+                Color(UIColor.systemGroupedBackground)
+                    .ignoresSafeArea()
+                
+                if viewModel.mediaItems.isEmpty {
+                    VStack {
+                        Text("暂无内容，开始下载后会显示缩略图")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(16)
+                        
+                        Spacer() // 向下顶
                     }
+                } else {
+                    VStack(spacing: 0) {
+                        WaterfallGrid(viewModel.mediaItems, columns: 2, spacing: 12) { item in
+                            MediaTile(item: item)
+                        }
+                    }
+                    .ignoresSafeArea(edges: .all)
                 }
-                .padding(.top, 10)
             }
             .navigationTitle("已下载")
             .navigationBarTitleDisplayMode(.large)
@@ -369,22 +366,28 @@ struct MediaTile: View {
     let item: MediaPreviewItem
     @State private var thumbnail: UIImage?
     @State private var aspectRatio: CGFloat = 1
+    @State private var isLoading: Bool = true
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            if let image = thumbnail {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(aspectRatio, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            } else {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.secondary.opacity(0.1))
-                    .aspectRatio(1, contentMode: .fit)
-                    .overlay(
-                        ProgressView()
-                            .controlSize(.small)
-                    )
+            Group {
+                if let image = thumbnail, !isLoading {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(aspectRatio, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                } else {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color.secondary.opacity(0.1))
+                        .aspectRatio(1, contentMode: .fit)
+                        .overlay(
+                            ProgressView()
+                                .controlSize(.small)
+                        )
+                }
+            }
+            .onAppear {
+                loadThumbnail()
             }
 
             if item.isVideo {
@@ -395,12 +398,36 @@ struct MediaTile: View {
                     .padding(8)
             }
         }
-        .task(id: item.id) {
+    }
+
+    private func loadThumbnail() {
+        // 防止重复加载
+        if thumbnail != nil && !isLoading {
+            return
+        }
+
+        isLoading = true
+
+        Task {
             if let image = await ThumbnailGenerator.shared.thumbnail(for: item) {
                 await MainActor.run {
                     thumbnail = image
                     let ratio = image.size.width / max(image.size.height, 1)
                     aspectRatio = ratio.isFinite && ratio > 0 ? ratio : 1
+                    isLoading = false
+
+                    // 通知布局更新高度
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        NotificationCenter.default.post(
+                            name: NSNotification.Name("MediaTileHeightUpdated"),
+                            object: nil,
+                            userInfo: ["itemId": item.id, "aspectRatio": aspectRatio]
+                        )
+                    }
+                }
+            } else {
+                await MainActor.run {
+                    isLoading = false
                 }
             }
         }
