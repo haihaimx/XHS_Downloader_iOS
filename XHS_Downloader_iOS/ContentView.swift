@@ -10,6 +10,27 @@ import AVFoundation
 import UIKit
 import QuickLook
 
+// MARK: - Adaptive Glass Effect for iOS Version Compatibility
+extension View {
+    @ViewBuilder
+    func adaptiveGlassEffect() -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect()
+        } else {
+            self.background(.ultraThinMaterial, in: Capsule())
+        }
+    }
+
+    @ViewBuilder
+    func adaptiveGlassEffect<S: Shape>(in shape: S) -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular, in: shape)
+        } else {
+            self.background(.ultraThinMaterial, in: shape)
+        }
+    }
+}
+
 struct ContentView: View {
     @StateObject private var viewModel = DownloaderViewModel()
     @State private var showingSettings = false
@@ -93,7 +114,7 @@ struct HomeView: View {
                                     Spacer()
                                 }
                             }
-                            .glassEffect()
+                            .adaptiveGlassEffect()
                             .buttonStyle(.bordered)
                             .disabled(viewModel.isDownloading)
                             .frame(maxWidth: .infinity)
@@ -109,7 +130,7 @@ struct HomeView: View {
                                     Spacer()
                                 }
                             }
-                            .glassEffect()
+                            .adaptiveGlassEffect()
                             .buttonStyle(.borderedProminent)
                             .disabled(viewModel.shareText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isDownloading)
                             .frame(maxWidth: .infinity)
@@ -130,7 +151,7 @@ struct HomeView: View {
                                 Spacer()
                             }
                         }
-                        .glassEffect()
+                        .adaptiveGlassEffect()
                         .buttonStyle(.bordered)
                         .disabled(viewModel.shareText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isDownloading)
                         .frame(maxWidth: .infinity)
@@ -427,7 +448,7 @@ struct MediaTile: View {
             .padding(.vertical, 10)
         }
         .background((Color(UIColor.systemBackground)))
-        .glassEffect(in: .rect(cornerRadius: 16))
+        .adaptiveGlassEffect(in: .rect(cornerRadius: 16))
         .onTapGesture {
             // 使用系统图库预览媒体文件
             openSystemPreview()
@@ -708,7 +729,7 @@ struct SettingsSheet: View {
                         Spacer()
                     }
                 }
-                .glassEffect()
+                .adaptiveGlassEffect()
                 .buttonStyle(.borderedProminent)
             }
             .padding(24)
