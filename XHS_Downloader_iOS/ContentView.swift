@@ -8,6 +8,7 @@
 import SwiftUI
 import AVFoundation
 import UIKit
+import QuickLook
 
 struct ContentView: View {
     @StateObject private var viewModel = DownloaderViewModel()
@@ -302,6 +303,7 @@ struct ShareInputField: View {
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
                                 .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
                         )
+//                        .glassEffect(in: .rect(cornerRadius: 18))
                         .focused($isFocused)
 
                     if !text.isEmpty {
@@ -367,36 +369,68 @@ struct MediaTile: View {
     @State private var thumbnail: UIImage?
     @State private var aspectRatio: CGFloat = 1
     @State private var isLoading: Bool = true
+    @State private var resolution: String = "" // 分辨率状态
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            Group {
-                if let image = thumbnail, !isLoading {
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(aspectRatio, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                } else {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.secondary.opacity(0.1))
-                        .aspectRatio(1, contentMode: .fit)
-                        .overlay(
-                            ProgressView()
-                                .controlSize(.small)
-                        )
+        VStack(spacing: 0) {
+            // 图片预览区域
+            ZStack(alignment: .bottomTrailing) {
+                Group {
+                    if let image = thumbnail, !isLoading {
+                        Image(uiImage: image)
+                            .resizable()
+                            .aspectRatio(aspectRatio, contentMode: .fill) // 使用fill模式填充
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .clipped()
+                    } else {
+                        Color.secondary.opacity(0.1)
+                            .aspectRatio(aspectRatio, contentMode: .fill)
+                            .overlay(
+                                ProgressView()
+                                    .controlSize(.small)
+                            )
+                    }
+                }
+                .onAppear {
+                    loadThumbnail()
+                }
+
+                if item.isVideo {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(.white)
+                        .shadow(radius: 4)
+                        .padding(8)
                 }
             }
-            .onAppear {
-                loadThumbnail()
-            }
+            .frame(maxHeight: .infinity, alignment: .top)
 
-            if item.isVideo {
-                Image(systemName: "play.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(.white)
-                    .shadow(radius: 4)
-                    .padding(8)
+            // 底部信息栏
+            HStack {
+                // 文件大小
+                Text(formatFileSize(item.fileSize))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+
+                Spacer()
+
+                // 分辨率显示在footer右侧
+                if !resolution.isEmpty {
+                    Text(resolution)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+        }
+        .background((Color(UIColor.systemBackground)))
+        .glassEffect(in: .rect(cornerRadius: 16))
+        .onTapGesture {
+            // 使用系统图库预览媒体文件
+            openSystemPreview()
         }
     }
 
@@ -416,12 +450,35 @@ struct MediaTile: View {
                     aspectRatio = ratio.isFinite && ratio > 0 ? ratio : 1
                     isLoading = false
 
+                    // 获取原始文件的分辨率
+                    if item.isVideo {
+                        // 对于视频，获取视频尺寸
+                        getVideoResolution { resolutionStr in
+                            resolution = resolutionStr
+                        }
+                    } else {
+                        // 对于图片，使用图像尺寸
+                        resolution = "\(Int(image.size.width))×\(Int(image.size.height))"
+                    }
+
+                    // 计算包含footer的总高度 - 使用aspectRatio来计算高度
+                    let footerHeight: CGFloat = 40 // 底部信息栏高度
+                    // 由于我们无法在这里知道确切的宽度，我们将高度信息发送给布局系统
+                    // 布局系统将在知道确切宽度时计算实际高度
+                    let calculatedHeight = CGFloat(1) / aspectRatio // 使用倒数来表示高度比例
+                    let totalHeight = calculatedHeight + footerHeight
+
                     // 通知布局更新高度
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                         NotificationCenter.default.post(
                             name: NSNotification.Name("MediaTileHeightUpdated"),
                             object: nil,
-                            userInfo: ["itemId": item.id, "aspectRatio": aspectRatio]
+                            userInfo: [
+                                "itemId": item.id,
+                                "aspectRatio": aspectRatio,
+                                "height": totalHeight,
+                                "hasFooter": true // 标记此项目有footer
+                            ]
                         )
                     }
                 }
@@ -430,6 +487,109 @@ struct MediaTile: View {
                     isLoading = false
                 }
             }
+        }
+    }
+
+    private func getVideoResolution(completion: @escaping (String) -> Void) {
+        let asset = AVAsset(url: item.localURL)
+        let key = "tracks"
+
+        asset.loadValuesAsynchronously(forKeys: [key]) {
+            var error: NSError?
+            let status = asset.statusOfValue(forKey: key, error: &error)
+
+            DispatchQueue.main.async {
+                if status == .loaded {
+                    if let track = asset.tracks(withMediaType: .video).first {
+                        let size = track.naturalSize.applying(track.preferredTransform)
+                        let width = abs(size.width)
+                        let height = abs(size.height)
+                        completion("\(Int(width))×\(Int(height))")
+                    } else {
+                        completion("未知")
+                    }
+                } else {
+                    completion("未知")
+                }
+            }
+        }
+    }
+
+    private func formatFileSize(_ size: Int64) -> String {
+        let bytes = Double(size)
+        switch bytes {
+        case let x where x >= 1_000_000_000:
+            return String(format: "%.2f GB", x / (1_000_000_000))
+        case let x where x >= 1_000_000:
+            return String(format: "%.1f MB", x / (1_000_000))
+        case let x where x >= 1_000:
+            return String(format: "%.1f KB", x / (1_000))
+        default:
+            return "\(Int(bytes)) B"
+        }
+    }
+}
+
+// MARK: - MediaTile Preview Functionality
+extension MediaTile {
+    private func openSystemPreview() {
+        // 使用QuickLook预览文件
+        let previewController = MediaPreviewController(url: item.localURL)
+        previewController.modalPresentationStyle = .fullScreen
+
+        // 获取当前的ViewController
+        if let rootVC = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first?.windows
+            .first?.rootViewController {
+
+            // 寻找最顶层的ViewController
+            let topVC = rootVC.findBestViewController()
+            topVC.present(previewController, animated: true)
+        }
+    }
+}
+
+// MARK: - Media Preview Controller
+class MediaPreviewController: QLPreviewController {
+    private let url: URL
+
+    init(url: URL) {
+        self.url = url
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        self.dataSource = self
+    }
+}
+
+extension MediaPreviewController: QLPreviewControllerDataSource {
+    func numberOfPreviewItems(in controller: QLPreviewController) -> Int {
+        return 1
+    }
+
+    func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
+        return url as NSURL
+    }
+}
+
+// MARK: - Helper for finding top ViewController
+extension UIViewController {
+    func findBestViewController() -> UIViewController {
+        if let presented = self.presentedViewController {
+            return presented.findBestViewController()
+        } else if let navigation = self as? UINavigationController {
+            return navigation.topViewController?.findBestViewController() ?? self
+        } else if let tab = self as? UITabBarController {
+            return tab.selectedViewController?.findBestViewController() ?? self
+        } else {
+            return self
         }
     }
 }

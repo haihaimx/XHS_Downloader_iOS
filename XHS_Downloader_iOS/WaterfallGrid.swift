@@ -112,9 +112,18 @@ struct WaterfallGrid<Data: Identifiable & Hashable, Content: View>: UIViewRepres
             // 这里我们使用一个通用方法，遍历数据源来查找匹配的ID
             if let identifiableDataSource = dataSource as? any IdentifiableDataSource {
                 if let index = identifiableDataSource.indexOfItemId(itemId) {
-                    // 根据aspectRatio计算高度（假设宽度为固定值）
                     let width = layout.columnWidth
-                    let height = width / aspectRatio // 根据宽高比计算高度
+                    var height = width / aspectRatio // 根据宽高比计算基础高度
+
+                    // 如果项目有footer，增加footer高度
+                    if let hasFooter = userInfo["hasFooter"] as? Bool, hasFooter {
+                        let footerHeight: CGFloat = 40 // 底部信息栏高度
+                        height += footerHeight
+                    } else if let providedHeight = userInfo["height"] as? CGFloat {
+                        // 如果提供了具体的高度（包含footer），使用该高度
+                        height = providedHeight
+                    }
+
                     layout.updateHeight(for: index, height: height)
                 }
             }

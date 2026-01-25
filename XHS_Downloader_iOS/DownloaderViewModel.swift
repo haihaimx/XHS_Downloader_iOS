@@ -14,6 +14,23 @@ struct MediaPreviewItem: Identifiable, Hashable {
     let id = UUID()
     let localURL: URL
     let isVideo: Bool
+
+    var fileName: String {
+        return localURL.lastPathComponent
+    }
+
+    var fileSize: Int64 {
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: localURL.path)
+            return attributes[.size] as? Int64 ?? 0
+        } catch {
+            return 0
+        }
+    }
+
+    var path: String {
+        return localURL.path
+    }
 }
 
 struct LogEntry: Identifiable, Hashable {
@@ -267,6 +284,12 @@ final class DownloaderViewModel: ObservableObject {
                 #selector(UIKitPhotoSaver.videoSaveCompleted(_:didFinishSavingWithError:contextInfo:)),
                 nil
             )
+        }
+    }
+
+    func removeMediaItem(_ item: MediaPreviewItem) {
+        DispatchQueue.main.async {
+            self.mediaItems.removeAll { $0.id == item.id }
         }
     }
 }
