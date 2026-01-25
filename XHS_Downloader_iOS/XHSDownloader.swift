@@ -728,4 +728,122 @@ private extension XHSDownloader {
 
         return mediaType == .video ? "mp4" : "jpg"
     }
+
+    public func extractDescription(from input: String, logger: @escaping LogHandler) async throws -> String {
+        let linkStrings = extractLinkStrings(from: input)
+        guard !linkStrings.isEmpty else {
+            await logger("输入中没有检测到合法的小红书链接")
+            throw XHSDownloaderError.missingLinks
+        }
+
+        for raw in linkStrings {
+            if let context = try await prepareContext(for: raw, logger: logger) {
+                await logger("正在获取笔记：\(context.resolvedURL.absoluteString)")
+                guard let html = try await fetchPostDetails(for: context.resolvedURL) else {
+                    await logger("笔记加载失败：\(context.resolvedURL.absoluteString)")
+                    continue
+                }
+
+                if let description = parseDescriptionFromHtml(html: html) {
+                    return description
+                }
+            }
+        }
+
+        throw XHSDownloaderError.parsingFailed
+    }
+
+    func parseDescriptionFromHtml(html: String) -> String? {
+        // 查找笔记描述
+        if let script = extractInitialStateScript(from: html),
+           let root = evaluateInitialStateScript(script) {
+            if let noteRoot = root["note"] as? [String: Any] {
+                if let description = extractDescriptionFromNoteRoot(noteRoot) {
+                    return description
+                }
+            }
+
+            if let detailMap = root["noteDetailMap"] as? [String: Any] {
+                for value in detailMap.values {
+                    if let dict = value as? [String: Any],
+                       let note = dict["note"] as? [String: Any],
+                       let description = extractDescriptionFromNoteRoot(note) {
+                        return description
+                    }
+                }
+            }
+        }
+
+        // 如果从初始状态脚本中找不到，尝试从HTML中查找
+        let descPattern = "(?<=<meta property=\"og:description\" content=\")[^\"]*(?=\")"
+        let regex = try? NSRegularExpression(pattern: descPattern, options: [])
+        let nsHTML = html as NSString
+        let fullRange = NSRange(location: 0, length: nsHTML.length)
+
+        if let match = regex?.firstMatch(in: html, options: [], range: fullRange) {
+            let description = nsHTML.substring(with: match.range)
+            if !description.isEmpty {
+                return description
+            }
+        }
+
+        // 尝试从其他可能的位置提取描述
+        let titlePattern = "(?<=<title>)[^<]*(?=</title>)"
+        let titleRegex = try? NSRegularExpression(pattern: titlePattern, options: .caseInsensitive)
+
+        if let match = titleRegex?.firstMatch(in: html, options: [], range: fullRange) {
+            let title = nsHTML.substring(with: match.range)
+            if !title.isEmpty {
+                // 移除可能的网站名称后缀
+                let cleanedTitle = title.replacingOccurrences(of: "-小红书", with: "").replacingOccurrences(of: "- XIAOHONGSHU", with: "")
+                return cleanedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        return nil
+    }
+
+    func extractDescriptionFromNoteRoot(_ noteRoot: [String: Any]) -> String? {
+        if let detailMap = noteRoot["noteDetailMap"] as? [String: Any] {
+            for value in detailMap.values {
+                if let dict = value as? [String: Any] {
+                    if let note = dict["note"] as? [String: Any] {
+                        if let description = extractDescriptionFromNote(note) {
+                            return description
+                        }
+                    } else {
+                        if let description = extractDescriptionFromNote(dict) {
+                            return description
+                        }
+                    }
+                }
+            }
+        } else if let note = noteRoot["note"] as? [String: Any] {
+            return extractDescriptionFromNote(note)
+        } else {
+            return extractDescriptionFromNote(noteRoot)
+        }
+        return nil
+    }
+
+    func extractDescriptionFromNote(_ note: [String: Any]) -> String? {
+        // 尝试不同的键名来获取描述
+        let possibleKeys = ["desc", "description", "title", "content", "note_title", "note_desc"]
+
+        for key in possibleKeys {
+            if let description = note[key] as? String {
+                if !description.isEmpty {
+                    return description.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+        }
+
+        // 检查是否有摘要字段
+        if let interactInfo = note["interactInfo"] as? [String: Any],
+           let commentCount = interactInfo["commentCount"] as? Int {
+            // 这里我们不直接返回评论数，而是继续寻找描述
+        }
+
+        return nil
+    }
 }

@@ -11,116 +11,280 @@ import UIKit
 
 struct ContentView: View {
     @StateObject private var viewModel = DownloaderViewModel()
-
-    private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-    }
+    @State private var showingSettings = false
+    @State private var selectedTab = 0
 
     var body: some View {
-        ZStack {
-            Color(.systemGroupedBackground)
-                .ignoresSafeArea()
+        TabView(selection: $selectedTab) {
+            HomeView(showingSettings: $showingSettings)
+                .tag(0)
+                .tabItem {
+                    Image(systemName: "link")
+                    Text("操作")
+                }
 
-            VStack(spacing: 20) {
-                topBar
-                upperSection
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                bottomPanel
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 10)
-            .padding(.bottom, 8)
+            LogView(showingSettings: $showingSettings)
+                .tag(1)
+                .tabItem {
+                    Image(systemName: "info.circle")
+                    Text("日志")
+                }
+
+            DownloadsView(showingSettings: $showingSettings)
+                .tag(2)
+                .tabItem {
+                    Image(systemName: "arrow.down")
+                    Text("下载")
+                }
         }
-        .sheet(isPresented: $viewModel.showSettingsSheet) {
-            SettingsSheet()
-                .presentationDetents([.fraction(0.5)])
-                .presentationDragIndicator(.visible)
-        }
-    }
-
-    private var topBar: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("小红书下载器v\(appVersion)")
-                    .font(.title3)
-                    .fontWeight(.semibold)
-                Text("无损分辨率 & 无水印")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button {
-                viewModel.showSettingsSheet = true
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.title3)
-                    .padding(12)
-                    .background(.ultraThinMaterial, in: Circle())
-            }
-            .buttonStyle(.plain)
-            .glassEffect()
-        }
-    }
-
-    private var upperSection: some View {
-        GeometryReader { geometry in
-            let height = geometry.size.height
-            VStack(spacing: 16) {
-                LogListView(logs: viewModel.logEntries)
-                    .frame(height: height * 0.3)
-                MediaGridView(items: viewModel.mediaItems)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-    }
-
-    private var bottomPanel: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("输入分享文本")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                ShareInputField(text: $viewModel.shareText)
-            }
-
-            Button {
-                viewModel.startDownload()
-            } label: {
-                HStack {
-                    Spacer()
-                    Text(viewModel.isDownloading ? "正在下载…" : "下载媒体")
-                        .fontWeight(.semibold)
-                        .padding(10)
-                    Spacer()
+        .onChange(of: viewModel.shouldSwitchToLogTab) { shouldSwitch in
+            if shouldSwitch {
+                selectedTab = 1
+                // 重置标志
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    viewModel.shouldSwitchToLogTab = false
                 }
             }
-            .glassEffect()
-            .buttonStyle(.borderedProminent)
-            .disabled(viewModel.shareText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isDownloading)
-
-            if viewModel.showProgress {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("下载进度")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text(viewModel.progressText)
-                            .font(.footnote)
-                            .monospacedDigit()
+        }
+        .environmentObject(viewModel)
+        .sheet(isPresented: $showingSettings) {
+            NavigationView {
+                SettingsSheet()
+                    .navigationTitle("设置")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("完成") {
+                                showingSettings = false
+                            }
+                        }
                     }
-                    ProgressView(value: viewModel.progressValue)
-                        .progressViewStyle(.linear)
-                }
             }
         }
-//        .padding(18)
-//        .background(
-//            RoundedRectangle(cornerRadius: 24, style: .continuous)
-//                .fill(.thinMaterial)
-//        )
     }
 }
+
+struct HomeView: View {
+    @EnvironmentObject var viewModel: DownloaderViewModel
+    @Binding var showingSettings: Bool
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("输入链接")
+                            .font(.headline)
+                            .padding(.horizontal, 16)
+
+                        ShareInputField(text: $viewModel.shareText)
+                            .padding(.horizontal, 16)
+
+                        HStack(spacing: 10) {
+                            Button {
+                                pasteLinkFromClipboard()
+                            } label: {
+                                HStack {
+                                    Spacer()
+                                    Text("粘贴链接")
+                                        .fontWeight(.semibold)
+                                        .padding(.vertical, 10)
+                                    Spacer()
+                                }
+                            }
+                            .glassEffect()
+                            .buttonStyle(.bordered)
+                            .disabled(viewModel.isDownloading)
+                            .frame(maxWidth: .infinity)
+
+                            Button {
+                                viewModel.startDownload()
+                            } label: {
+                                HStack {
+                                    Spacer()
+                                    Text(viewModel.isDownloading ? "下载中…" : "开始下载")
+                                        .fontWeight(.semibold)
+                                        .padding(.vertical, 10)
+                                    Spacer()
+                                }
+                            }
+                            .glassEffect()
+                            .buttonStyle(.borderedProminent)
+                            .disabled(viewModel.shareText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isDownloading)
+                            .frame(maxWidth: .infinity)
+                        }
+                        .padding(.horizontal, 16)
+
+                        Button {
+                            viewModel.copyDescription { message in
+                                // 在实际应用中，可以使用更合适的UI反馈
+                                print(message) // 临时输出到控制台
+                            }
+                        } label: {
+                            HStack {
+                                Spacer()
+                                Text("提取文案")
+                                    .fontWeight(.semibold)
+                                    .padding(.vertical, 10)
+                                Spacer()
+                            }
+                        }
+                        .glassEffect()
+                        .buttonStyle(.bordered)
+                        .disabled(viewModel.shareText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isDownloading)
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 16)
+                    }
+
+                    // 工具部分暂时为空，因为移除了"网页爬取模式"按钮
+                }
+                .padding(.top, 10)
+            }
+            .navigationTitle("小红书下载器")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                }
+            }
+        }
+    }
+
+    private func pasteLinkFromClipboard() {
+        if let clipboardContent = UIPasteboard.general.string {
+            viewModel.shareText = clipboardContent
+        }
+    }
+}
+
+struct LogView: View {
+    @EnvironmentObject var viewModel: DownloaderViewModel
+    @Binding var showingSettings: Bool
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(spacing: 16) {
+                    if viewModel.showProgress || viewModel.isDownloading {
+                        VStack(spacing: 6) {
+                            HStack {
+                                Text("进度")
+                                Spacer()
+                                Text(viewModel.progressText.isEmpty ? "--" : viewModel.progressText)
+                                    .foregroundColor(.gray)
+                            }
+                            ProgressView(value: viewModel.progressValue)
+                                .progressViewStyle(LinearProgressViewStyle())
+                        }
+                        .padding(.top, 10)
+                        .padding(.horizontal, 16)
+                        .background(Color(.tertiarySystemBackground))
+                        .cornerRadius(18)
+                    }
+
+//                    Text("日志状态")
+//                        .font(.headline)
+//                        .padding(.horizontal, 16)
+
+                    if viewModel.logEntries.isEmpty {
+                        VStack {
+                            Text("暂无内容，开始下载后会显示日志")
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        }
+                        .padding(16)
+                    } else {
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                LazyVStack(alignment: .leading, spacing: 6) {
+                                    ForEach(viewModel.logEntries) { log in
+                                        Text(log.displayText)
+                                            .font(.system(.caption, design: .monospaced))
+                                            .foregroundColor(log.id == viewModel.logEntries.last?.id ? .accentColor : .primary)
+                                            .padding(.vertical, 2)
+                                            .id(log.id)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(16)
+                            }
+                            .onChange(of: viewModel.logEntries.last?.id) { id in
+                                guard let id else { return }
+                                DispatchQueue.main.async {
+                                    withAnimation {
+                                        proxy.scrollTo(id, anchor: .bottom)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.top, 10)
+            }
+            .navigationTitle("日志状态")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct DownloadsView: View {
+    @EnvironmentObject var viewModel: DownloaderViewModel
+    @Binding var showingSettings: Bool
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(spacing: 16) {
+//                    Text("已下载")
+//                        .font(.headline)
+//                        .padding(.horizontal, 16)
+
+                    if viewModel.mediaItems.isEmpty {
+                        VStack {
+                            Text("暂无内容，开始下载后会显示缩略图")
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        }
+                        .padding(16)
+                    } else {
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                            ForEach(viewModel.mediaItems) { item in
+                                MediaTile(item: item)
+                            }
+                        }
+                        .padding(16)
+                    }
+                }
+                .padding(.top, 10)
+            }
+            .navigationTitle("已下载")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 struct ShareInputField: View {
     @Binding var text: String
@@ -201,103 +365,6 @@ struct ShareInputField: View {
     }
 }
 
-struct LogListView: View {
-    let logs: [LogEntry]
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    if logs.isEmpty {
-                        Image(systemName: "info.circle.text.page")
-                            .font(.system(size: 32))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.top, 20)
-                        Text("实时日志会显示在此处")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                    } else {
-                        ForEach(logs) { log in
-                            Text(log.displayText)
-                                .font(.system(.footnote, design: .monospaced))
-                                .foregroundStyle(.primary)
-                                .padding(.vertical, 2)
-                                .id(log.id)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(14)
-            }
-            .scrollIndicators(.hidden)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(.thinMaterial)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .onChange(of: logs.last?.id) { id in
-                guard let id else { return }
-                DispatchQueue.main.async {
-                    withAnimation {
-                        proxy.scrollTo(id, anchor: .bottom)
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct MediaGridView: View {
-    let items: [MediaPreviewItem]
-    private let columns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                if items.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "photo.on.rectangle.angled")
-                            .font(.system(size: 32))
-                            .foregroundStyle(.secondary)
-                        Text("下载的图片和视频会显示在这里")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 180)
-                } else {
-                    LazyVGrid(columns: columns, spacing: 12) {
-                        ForEach(items) { item in
-                            MediaTile(item: item)
-                                .id(item.id)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-            .scrollIndicators(.hidden)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(.thinMaterial)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .padding(.bottom, 2)
-            .onChange(of: items.last?.id) { id in
-                guard let id else { return }
-                DispatchQueue.main.async {
-                    withAnimation {
-                        proxy.scrollTo(id, anchor: .bottom)
-                    }
-                }
-            }
-        }
-    }
-}
-
 struct MediaTile: View {
     let item: MediaPreviewItem
     @State private var thumbnail: UIImage?
@@ -365,9 +432,9 @@ struct SettingsSheet: View {
 //                    .frame(maxWidth: .infinity)
 //                    .padding(.top, 8)
 
-                Text("设置")
-                    .font(.title3)
-                    .fontWeight(.semibold)
+//                Text("设置")
+//                    .font(.title3)
+//                    .fontWeight(.semibold)
 
                 Toggle("启用自定义命名格式", isOn: $enableCustomNaming)
                     .toggleStyle(SwitchToggleStyle(tint: .accentColor))
@@ -429,6 +496,17 @@ struct SettingsSheet: View {
                 }
 
                 Divider()
+                
+                // 版本号显示
+                VStack {
+                    HStack {
+                        Text("版本号")
+                        Spacer()
+                        Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
+                            .foregroundColor(.gray)
+                    }
+                }
+//                .padding(.top, 10)
 
                 Button {
                     if let githubURL = URL(string: "https://github.com/NEORUAA/XHS_Downloader_iOS") {

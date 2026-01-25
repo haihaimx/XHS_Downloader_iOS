@@ -41,6 +41,7 @@ final class DownloaderViewModel: ObservableObject {
     @Published var progressValue = 0.0
     @Published var progressText = ""
     @Published var showSettingsSheet = false
+    @Published var shouldSwitchToLogTab = false
 
     private let downloader = XHSDownloader()
 
@@ -52,12 +53,18 @@ final class DownloaderViewModel: ObservableObject {
         }
         guard !isDownloading else { return }
 
+        // 清空已有日志
+        logEntries.removeAll()
+
         isDownloading = true
         showProgress = false
         progressValue = 0
         progressText = ""
         mediaItems.removeAll()
         appendLog("准备开始解析分享内容…")
+
+        // 设置标志以切换到日志页
+        shouldSwitchToLogTab = true
 
         Task {
             do {
@@ -97,6 +104,34 @@ final class DownloaderViewModel: ObservableObject {
                     self.appendLog("下载失败：\(error.userFacingMessage)")
                     self.isDownloading = false
                     self.showProgress = false
+                }
+            }
+        }
+    }
+
+    func copyDescription(completion: @escaping (String) -> Void) {
+        let trimmed = shareText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            completion("请输入分享文本后再提取文案")
+            return
+        }
+
+        Task {
+            do {
+                let description = try await downloader.extractDescription(from: trimmed) { [weak self] message in
+                    guard let self else { return }
+                    await MainActor.run {
+                        self.appendLog(message)
+                    }
+                }
+
+                await MainActor.run {
+                    UIPasteboard.general.string = description
+                    completion("已复制文案到剪贴板")
+                }
+            } catch {
+                await MainActor.run {
+                    completion("提取文案失败：\(error.localizedDescription)")
                 }
             }
         }
